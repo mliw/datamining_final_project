@@ -1,0 +1,524 @@
+---
+title: "ECO395M STAT Final Project-Kaggle House Price Prediction" 
+author: "Mingwei Li, Xinyu Leng, Hongjin Long, shuheng Huang"
+thanks: "Mingwei Li, Xinyu Leng, Hongjin Long and shuheng Huang are master students of economics, The University of Texas at Austin"
+output:
+  pdf_document: 
+    number_sections: yes
+    includes:
+      in_header: preamble.tex
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+\begin{abstract}
+House Price prediction based on different house properties has become more and more important in real-world business. A precise prediction enables clients to bid or ask reasonable prices, and thus they can save more money or make more profit. This project aims to solve a real-world house price prediction problem on \textcolor{blue}{\href{https://www.kaggle.com/c/house-prices-advanced-regression-techniques}{kaggle}}. In our project, 3 single models including Xgboost, SVM-Regressor and Lasso Regression are adopted. Repeated cross-validation is used to tune parameters. After the 3 single models with the best parameters are obtained, We stack them with different weights. Finally, the rmse on leader board is 0.13357, ranks top $3623/9923=36.5\%$.
+
+The code of our project is available at \textcolor{blue}{\href{https://github.com/mliw/datamining_final_project}{github}}.
+\begin{figure}[!htbp]
+	\centering
+	\includegraphics[width=0.5\textwidth]{pics/0.jpg}
+\end{figure}
+\end{abstract}
+
+\newpage
+\tableofcontents
+
+\newpage
+\section{Introduction}
+The problem we try to answer is \textbf{kaggle house price prediction problem}.
+
+In real-world business, there are many situations where clients have to make a precise evaluation on house price. What they can observe are some house properties like area and quality. Some properties are listed in table \ref{table:1}.
+\begin{table}[!htbp]
+\caption{Part of House Properties of Kaggle Competition}
+\vspace{-15pt}
+\footnotesize
+\begin{center}
+\begin{tabular}{cc}
+\hline
+Properties  & Descriptions                                \\ \hline
+MSSubClass  & The building class                          \\
+MSZoning    & The general zoning classification           \\
+LotFrontage & Linear feet of street connected to property \\
+LotArea     & Lot size in square feet                     \\
+...         & ...                                         \\
+SaleType    & Type of sale                                \\
+MiscVal     & \$Value of miscellaneous feature            \\ \hline
+\end{tabular}
+\end{center}
+\label{table:1}
+\end{table}
+Our ultimate goal is to build a model which can predict house price based on these properties. Such model is very important, as it can provide reasonable price to potential clients and help them promote their business.
+
+As for the kaggle competition, we have train data whose dimension is $1460\times 81$. 1460 houses with 81 different properties are included in our data. We would  (1)Impute missing values. (2)Design new features. (3)Conduct cross-validation based on train data. After the best model is obtained, we fit it on the whole train data set. Such model can be used to predict on test data whose dimension is $1459\times 80$. Then we get predicted prices of 1459 houses. Finally, we submit our prediction to kaggle and get our score. One advantage of kaggle is such competition enables us to compare our performance with other teams. Part of our final submission is like figure \ref{fig:1}.
+\begin{figure}[!htbp]
+	\centering
+	\includegraphics[width=0.2\textwidth]{pics/1.jpg}
+	\caption{Part of our final submission}
+	\label{fig:1}
+\end{figure}
+
+\newpage
+\section{Methods}
+\subsection{Data Preprocessing}
+A part of original data is listed in table \ref{table:2}. The dimension of original data is $1460\times 81$. We can see there is a lot of missing values(NA) and factor features. Our prediction target is log1p\_SalePrice.
+\begin{table}[!htbp]
+\caption{Part of Original data}
+\vspace{-15pt}
+\footnotesize
+\begin{center}
+\begin{tabular}{ccccccccc}
+\hline
+Id   & MSSubClass & MSZoning & LotFrontage & LotArea & Street & Alley & ... & log1p\_SalePrice \\ \hline
+1    & 60         & RL       & 65          & 8450    & Pave   & NA    & ... & 12.24769912      \\
+2    & 20         & RL       & 80          & 9600    & Pave   & NA    & ... & 12.10901644      \\
+3    & 60         & RL       & 68          & 11250   & Pave   & NA    & ... & 12.31717117      \\
+4    & 70         & RL       & 60          & 9550    & Pave   & NA    & ... & 11.84940484      \\
+5    & 60         & RL       & 84          & 14260   & Pave   & NA    & ... & 12.4292202       \\
+...  & ...        & ...      & ...         & ...     & ...    & ...   & ... & ...              \\
+1459 & 20         & RL       & 68          & 9717    & Pave   & NA    & ... & 11.86446927      \\
+1460 & 20         & RL       & 75          & 9937    & Pave   & NA    & ... & 11.90159023      \\ \hline
+\end{tabular}
+\end{center}
+\label{table:2}
+\end{table}
+The procedure of data preprocessing can be summarized as follows:
+
+(1) Imputing missing value with median value or mode value.
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+library(bazar)
+library(tidyverse)
+library(Hmisc)
+library(dummies)
+
+
+# 1 Load data
+train_data = read.csv("data/original_data/train.csv", stringsAsFactors=TRUE)
+train_data$log1p_SalePrice = log(train_data$SalePrice+1)
+test_data = read.csv("data/original_data/test.csv", stringsAsFactors=TRUE)
+rownames(test_data) = test_data$Id
+rownames(train_data) = train_data$Id
+train_id = train_data$Id
+test_id = test_data$Id
+# Define NAs to merge
+test_data$log1p_SalePrice = NA
+test_data$SalePrice = NA
+all_data = rbind(train_data,test_data)
+all_data = subset(all_data, select = -SalePrice)
+train_data = subset(train_data, select = -SalePrice)
+#print("all_data size is")
+#print(dim(all_data))
+# At this stage we get all_data. all_data combine train and test data together
+# and log1p_SalePrice is prediction target.
+train_test = all_data
+
+
+# 2 Impute missing feature
+mis_num = colSums(is.na(all_data))
+# print(mis_num[mis_num>0])
+# 2.1 Impute LotFrontage ########Question 1!
+train_test_summary = train_test %>%
+  group_by(Neighborhood) %>%
+  summarise(median_LotFrontage=median(LotFrontage,na.rm=TRUE))
+train_test_summary = as.data.frame(train_test_summary)
+rownames(train_test_summary) = train_test_summary$Neighborhood
+train_test_summary = subset(train_test_summary,select = -Neighborhood)
+for (i in 1:dim(train_test)[1]){
+  if (is.na(train_test[i,"LotFrontage"])){
+    train_test[i,"LotFrontage"] = train_test_summary[train_test[i,"Neighborhood"],]
+  }
+}
+# 2.2 Alley
+train_test$Alley = impute(train_test$Alley,"None")
+# 2.3 MasVnrType
+train_test$MasVnrType = impute(train_test$MasVnrType,"None")
+# 2.4 MasVnrArea
+train_test$MasVnrArea = impute(train_test$MasVnrArea,median)
+# 2.5 BsmtQual
+train_test$BsmtQual = impute(train_test$BsmtQual,"no")
+# 2.6 BsmtCond
+train_test$BsmtCond = impute(train_test$BsmtCond,"no")
+# 2.7 BsmtExposure
+train_test$BsmtExposure = impute(train_test$BsmtExposure,"nobase")
+# 2.8 BsmtFinType1
+train_test$BsmtFinType1 = impute(train_test$BsmtFinType1,"nobase")
+# 2.9 BsmtFinType2
+train_test$BsmtFinType2 = impute(train_test$BsmtFinType2,"nobase")
+# 2.10 Electrical
+getmode <- function(v) {
+  v = v[!is.na(v)]
+  uniqv <- unique(v)
+  uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+Electrical_mode = getmode(train_test$Electrical)
+train_test$Electrical = impute(train_test$Electrical,Electrical_mode)
+# 2.11 FireplaceQu
+FireplaceQu_mode = getmode(train_test$FireplaceQu)
+train_test$FireplaceQu = impute(train_test$FireplaceQu,FireplaceQu_mode)
+# 2.12 GarageType
+train_test$GarageType = impute(train_test$GarageType,"nogarage")
+# 2.13 GarageYrBlt
+train_test$GarageYrBlt = impute(train_test$GarageYrBlt,median)
+# 2.14 GarageFinish
+train_test$GarageFinish = impute(train_test$GarageFinish,"nogarage")
+# 2.15 GarageQual
+train_test$GarageQual = impute(train_test$GarageQual,"nogarage")
+# 2.16 GarageCond
+train_test$GarageCond = impute(train_test$GarageCond,"nogarage")
+# 2.17 Fence
+train_test$Fence = impute(train_test$Fence,"nofence")
+# 2.18 MiscFeature
+train_test$MiscFeature = impute(train_test$MiscFeature,"None")
+# We have 16 missing features at this time
+# ['MSZoning','Utilities','Exterior1st','Exterior2nd','BsmtFinSF1','BsmtFinSF2','BsmtUnfSF','TotalBsmtSF',
+#  'BsmtFullBath','BsmtHalfBath','KitchenQual','Functional','GarageCars','GarageArea','PoolQC','SaleType']
+# 2.19 MSZoning
+MSZoning_mode = getmode(train_test$MSZoning)
+train_test$MSZoning = impute(train_test$MSZoning,MSZoning_mode)
+# 2.20 Utilities
+Utilities_mode = getmode(train_test$Utilities)
+train_test$Utilities = impute(train_test$Utilities,Utilities_mode)
+# 2.21 Exterior1st
+Exterior1st_mode = getmode(train_test$Exterior1st)
+train_test$Exterior1st = impute(train_test$Exterior1st,Exterior1st_mode)
+# 2.22 Exterior2nd
+Exterior2nd_mode = getmode(train_test$Exterior2nd)
+train_test$Exterior2nd = impute(train_test$Exterior2nd,Exterior2nd_mode)
+# 2.23 BsmtFinSF1
+train_test$BsmtFinSF1 = impute(train_test$BsmtFinSF1,median)
+# 2.24 BsmtFinSF2
+train_test$BsmtFinSF2 = impute(train_test$BsmtFinSF2,median)
+# 2.25 BsmtUnfSF
+train_test$BsmtUnfSF = impute(train_test$BsmtUnfSF,median)
+# 2.26 TotalBsmtSF
+train_test$TotalBsmtSF = impute(train_test$TotalBsmtSF,median)
+# 2.27 BsmtFullBath
+BsmtFullBath_mode = getmode(train_test$BsmtFullBath)
+train_test$BsmtFullBath = impute(train_test$BsmtFullBath,BsmtFullBath_mode)
+# 2.28 BsmtHalfBath
+BsmtHalfBath_mode = getmode(train_test$BsmtHalfBath)
+train_test$BsmtHalfBath = impute(train_test$BsmtHalfBath,BsmtHalfBath_mode)
+# 2.29 KitchenQual
+KitchenQual_mode = getmode(train_test$KitchenQual)
+train_test$KitchenQual = impute(train_test$KitchenQual,KitchenQual_mode)
+# 2.30 Functional
+Functional_mode = getmode(train_test$Functional)
+train_test$Functional = impute(train_test$Functional,Functional_mode)
+# 2.31 GarageCars
+train_test$GarageCars = impute(train_test$GarageCars,median)
+# 2.32 GarageArea
+train_test$GarageArea = impute(train_test$GarageArea,0)
+# 2.33 PoolQC
+train_test$PoolQC = impute(train_test$PoolQC,"nopool")
+# 2.34 SaleType
+SaleType_mode = getmode(train_test$SaleType)
+train_test$SaleType = impute(train_test$SaleType,SaleType_mode)
+mis_num = colSums(is.na(train_test))
+# print(mis_num[mis_num>0])
+# At this point, we have finished imputing missing features.
+```
+(2) Design new features.
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+# 3 Design new features
+# 3.1 area_per_car
+area_per_car = train_test$GarageArea/train_test$GarageCars
+area_per_car[is.na(area_per_car)] = 0
+train_test$area_per_car = area_per_car
+# 3.2 above_and_ground_area
+train_test$above_and_ground_area = train_test$TotalBsmtSF+train_test$GrLivArea
+# 3.3 Total_Bathrooms
+train_test$Total_Bathrooms = train_test$FullBath+ 0.5*train_test$HalfBath+
+                                   train_test$BsmtFullBath+ 0.5*train_test$BsmtHalfBath
+# 3.4 one_and_two
+train_test$one_and_two = train_test$X1stFlrSF+train_test$X2ndFlrSF
+# 3.5 Total_Porch_Area
+train_test$Total_Porch_Area = train_test$OpenPorchSF + train_test$X3SsnPorch + train_test$EnclosedPorch + train_test$ScreenPorch + train_test$WoodDeckSF
+```
+(3) Delete outliers.
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+train_test_save = train_test
+tem_train = train_test[train_id,]
+logi_0 = tem_train$log1p_SalePrice>=12.25 & tem_train$OverallQual==4
+logi_1 = tem_train$log1p_SalePrice<=11.5 & tem_train$OverallQual==7
+logi_2 = tem_train$log1p_SalePrice<=12.5 & tem_train$OverallQual==10
+logi_3 = tem_train$log1p_SalePrice<=12.5 & tem_train$above_and_ground_area>=6000
+logi_4 = tem_train$log1p_SalePrice<=11 & tem_train$ExterQual=="Gd"
+logi_5 = tem_train$log1p_SalePrice<=12.5 & tem_train$one_and_two>=4000
+logi_6 = tem_train$log1p_SalePrice<=11.5 & tem_train$GarageArea>=1200
+logi_7 = tem_train$log1p_SalePrice<=12.5 & tem_train$TotalBsmtSF>=5000
+logi = logi_0 |logi_1 |logi_2 |logi_3 |logi_4 |logi_5 |logi_6 |logi_7 
+maintain_index = train_id[!logi]
+tem_train = train_test[maintain_index,]
+tem_test = train_test[test_id,]
+final_combination = rbind(tem_train,tem_test)
+```
+After we impute all missing values and design new features, R-package \textit{dummies} is adopted to encode factor features into one-hot numerical variables. Finally, the dimension of train data becomes $1454\times 308$, which means we have 1454 observations and 308 features. 
+
+
+\subsection{Single Models}
+Three single models include Xgboost, SVM-Regression and Lasso Regression would be used to fit on the training data. We use repeated cross-validation instead of one-time cross-validation to find the best model parameter. Details of repeated cross-validation are listed below, we conduct cross-validation 20 times in order to make a precise evaluation of parameter performance.
+\begin{algorithm}[!htbp]
+	\caption{Repeated Cross-Validation}
+	\begin{algorithmic}[1]%一行一个标行号
+		\STATE \textbf{Input} $(param_1,param_2,...,param_n)$
+		\FOR{$i=1$ to $n$}
+		\STATE Use $param_i$ as model parameters
+		\STATE Define $CV_i=0$
+		\FOR{$j=1$ to $20$}
+		\STATE Set the $random\_seed=j$	
+    \STATE Shuffle the data according to $random\_seed$ 
+    \STATE Calculate the corresponding$CV\_error_j$    
+    \STATE $CV_i=CV_i+CV\_error_j$ 
+    \ENDFOR
+    \ENDFOR
+    \STATE $param_i$ with the lowest $CV_i$ is the best parameter 
+	\end{algorithmic}
+\end{algorithm}
+
+\newpage
+Then we discuss the 3 single models:
+
+\textbf{1 Xgboost}: According to \textcolor{blue}{\href{https://cran.r-project.org/web/packages/xgboost/index.html}{Xgboost Package Introduction}}, Extreme Gradient Boosting, which is an efficient implementation of the gradient boosting framework from Chen & Guestrin (2016). This package is its R interface. The package includes efficient linear model solver and tree learning algorithms. The package can automatically do parallel computation on a single machine which could be more than 10 times faster than existing gradient boosting packages. It supports various objective functions, including regression, classification and ranking. The package is made to be extensible, so that users are also allowed to define their own objectives easily. 
+
+For simplicity, we can regard XGBoost as a tree model which tries to use a linear combination of  indicative functions to approximate the relationship between $X$ and $Y$.Based on real-analysis knowledge, linear combination of indicative functions can approximate all Borel-measurable functions. Therefore, Xgboost is very powerful in fitting data.
+
+The details of Xgboost in our project is as follows.
+\begin{algorithm}[!htbp]
+	\caption{Xgboost}
+	\begin{algorithmic}[1]%一行一个标行号
+		\STATE \textbf{Input} $train\_data,test\_data,(param_1,param_2,...,param_n)$
+		\STATE Use \textbf{Xgboost} fit on $train\_data$ to get the top 25 features\\
+		Such features would be used for following repeated cross-validation
+		\STATE Use repeated cross-validation to find $param_{best}$ for \textbf{Xgboost}
+		\STATE \textbf{Xgboost} with $param_{best}$ would fit on $train\_data$ 
+		\STATE Fitted \textbf{Xgboost} would be used to make prediction on $test\_data$ 
+	\end{algorithmic}
+\end{algorithm}
+Code of finding $param\_best$ is at \textcolor{blue}{\href{https://github.com/mliw/datamining_final_project/blob/master/Section2_xgb.R}{here}}; Code of making prediction is at \textcolor{blue}{\href{https://github.com/mliw/datamining_final_project/blob/master/Section2_xgb_submission.R}{here}}. 
+
+\vspace{12pt}
+\textbf{2 SVM-Regression}: According to \textcolor{blue}{\href{https://cran.r-project.org/web/packages/e1071/e1071.pdf}{e1071 Package Introduction}}, function SVM is used to train a support vector machine. It can be used to carry out general regression and classification (of nu and epsilon-type), as well as density-estimation. A formula interface is provided.
+
+SVM firstly maps the original data to a different space through a kernel function. Such kernel function can be linear, polynomial, radial basis and sigmoid. Linear kernel performs the best in our project. Then, a hyperplane is adopted to divide the data into different groups with different mean values. The details of SVM in our project is as follows. 
+\begin{algorithm}[!htbp]
+	\caption{SVM}
+	\begin{algorithmic}[1]%一行一个标行号
+		\STATE \textbf{Input} $train\_data,test\_data,(param_1,param_2,...,param_n)$
+		\STATE Use \textbf{Xgboost} fit on $train\_data$ to get the top 25 features\\
+		Such features would be used for following repeated cross-validation
+		\STATE Use repeated cross-validation to find $param_{best}$ for \textbf{SVM}
+		\STATE \textbf{SVM} with $param_{best}$ would fit on $train\_data$ 
+		\STATE Fitted \textbf{SVM} would be used to make prediction on $test\_data$ 
+	\end{algorithmic}
+\end{algorithm}
+Code of finding $param\_best$ is at \textcolor{blue}{\href{https://github.com/mliw/datamining_final_project/blob/master/Section2_svr.R}{here}}; Code of making prediction is at \textcolor{blue}{\href{https://github.com/mliw/datamining_final_project/blob/master/Section2_svr_submission.R}{here}}. 
+
+\newpage
+\textbf{3 Lasso Regression}: Unlike classical linear regression, lasso's optimization target is as follows. A L1 penalty term is involved.
+$$
+\sum_{i=1}^{n}(y_i-\sum_jx_{ij}\beta_j)^2+\lambda \sum_{j=1}^{p}|\beta_j|
+$$
+According to \textcolor{blue}{\href{https://glmnet.stanford.edu/articles/glmnet.html}{Glmnet Introduction}}, Glmnet is a package that fits generalized linear and similar models via penalized maximum likelihood. The regularization path is computed for the lasso or elastic net penalty at a grid of values (on the log scale) for the regularization parameter lambda. The algorithm is extremely fast, and can exploit sparsity in the input matrix $X$.
+
+The details of Lasso in our project is as follows. We don't conduct feature selection this time, as Lasso can select features automatically. 
+\begin{algorithm}[!htbp]
+	\caption{Lasso}
+	\begin{algorithmic}[1]%一行一个标行号
+		\STATE \textbf{Input} $train\_data,test\_data,(param_1,param_2,...,param_n)$
+		\STATE Use repeated cross-validation to find $param_{best}$ for \textbf{Lasso}
+		\STATE \textbf{Lasso} with $param_{best}$ would fit on $train\_data$ 
+		\STATE Fitted \textbf{Lasso} would be used to make prediction on $test\_data$ 
+	\end{algorithmic}
+\end{algorithm}
+Code of finding $param\_best$ is at \textcolor{blue}{\href{https://github.com/mliw/datamining_final_project/blob/master/Section2_lasso.R}{here}}; Code of making prediction is at \textcolor{blue}{\href{https://github.com/mliw/datamining_final_project/blob/master/Section2_lasso_submission.R}{here}}. 
+
+\subsection{Stacking}
+At this stage, we have 3 predictions from 3 different single models. Then we can mix these predictions with different weights to achieve a higher score(lower RMSE) in public leaderboard.
+
+\newpage
+\section{Results}
+
+\subsection{Feature Importance}
+
+Feature engineering determines the upper bound of our final prediction performance, and our model determines how close we can achieve this upper bound. If we can design a feature which has the same value as the prediction target log1p\_SalePrice, then a single linear model can help us get a high score in public leaderboard.
+
+Figure \ref{fig:2} demonstrates the comparison between best Feature and worst Feature. We can see the predictive power of above_and_ground_area.
+
+\begin{figure}[!htbp]
+\begin{subfigure}{.5\textwidth}
+  \centering
+  \includegraphics[width=8cm, height=8cm]{pics/best_feature.png}
+  \caption{above\_and\_ground\_area(best\_feature)}
+\end{subfigure}
+\begin{subfigure}{.5\textwidth}
+  \centering
+  \includegraphics[width=8cm, height=8cm]{pics/worst_feature.png}
+  \caption{YrSold(worst\_feature)}
+\end{subfigure}
+\caption{Comparison between best Feature and worst Feature}
+\label{fig:2}
+\end{figure}
+
+\subsection{Xgboost}
+The results of repeated cross-validation of Xgboost are listed in table \ref{table:3}. The best parameter combination is $gamma\_value=0,min\_child\_weight\_value=0$.
+\begin{table}[!htbp]
+\caption{Results of repeated cross-validation of Xgboost }
+\vspace{-15pt}
+\footnotesize
+\begin{center}
+\begin{tabular}{ccc}
+\hline
+gamma\_value & min\_child\_weight\_value & cross-validation error \\ \hline
+0            & 0                         & \textcolor{blue}{0.121804009}            \\
+0            & 0.3                       & 0.121804009            \\
+0            & 0.6                       & 0.121804009            \\
+0            & 1                         & 0.121804009            \\
+0.3          & 0                         & 0.13818625             \\
+0.3          & 0.3                       & 0.13818625             \\
+0.3          & 0.6                       & 0.13818625             \\
+0.3          & 1                         & 0.13818625             \\
+0.6          & 0                         & 0.146007412            \\
+0.6          & 0.3                       & 0.146007412            \\
+0.6          & 0.6                       & 0.146007412            \\
+0.6          & 1                         & 0.146007412            \\
+1            & 0                         & 0.153047792            \\
+1            & 0.3                       & 0.153047792            \\
+1            & 0.6                       & 0.153047792            \\
+1            & 1                         & 0.153047792            \\ \hline
+\end{tabular}
+\end{center}
+\label{table:3}
+\end{table}
+Xgboost with the best parameters is adopted to fit on the train data and make prediction. The RMSE on public leaderboard is 0.14181.
+
+\newpage
+\subsection{SVM-Regression}
+Different kernel functions are tried, and linear kernel is much better than others. The results of repeated cross-validation of SVM-Regression are listed in table \ref{table:4}. The best parameter combination is $eps\_value=0.1,kernel\_type=linear$.
+\begin{table}[!htbp]
+\caption{Results of repeated cross-validation of SVM-Regression }
+\vspace{-15pt}
+\footnotesize
+\begin{center}
+\begin{tabular}{ccc}
+\hline
+eps\_value & kernel\_type & cross-validation error \\ \hline
+0          & linear       & 0.116743011            \\
+0.1        & linear       & \textcolor{blue}{0.116404929}            \\
+0.2        & linear       & 0.116454238            \\
+0.3        & linear       & 0.116948547            \\
+0.4        & linear       & 0.118046238            \\
+0.5        & linear       & 0.120444927            \\
+0.6        & linear       & 0.124259672            \\
+0.7        & linear       & 0.128512672            \\
+0.8        & linear       & 0.134190005            \\
+0.9        & linear       & 0.14726593             \\
+1          & linear       & 0.160303307            \\ \hline
+\end{tabular}
+\end{center}
+\label{table:4}
+\end{table}
+SVM with the best parameters is adopted to fit on the train data and make prediction. The RMSE on public leaderboard is 0.14150.
+
+\subsection{Lasso-Regression}
+The results of repeated cross-validation of Lasso-Regression are listed in table \ref{table:5}. $alpha=0,lambda=0.2$ are the best parameters.
+\begin{table}[!htbp]
+\caption{Results of repeated cross-validation of Lasso-Regression }
+\vspace{-15pt}
+\footnotesize
+\begin{center}
+\begin{tabular}{ccc}
+\hline
+alpha & lambda & RMSE        \\ \hline
+0     & 0      & 0.117741538 \\
+0     & 0.2    & \textcolor{blue}{0.1158448}   \\
+0     & 0.4    & 0.119725798 \\
+0     & 0.6    & 0.124441736 \\
+0     & 0.8    & 0.129306086 \\
+0     & 1      & 0.134140604 \\
+0.2   & 0      & 0.122860809 \\
+0.2   & 0.2    & 0.155784292 \\
+0.2   & 0.4    & 0.201218861 \\
+0.2   & 0.6    & 0.244992069 \\
+0.2   & 0.8    & 0.287642877 \\ \hline
+\end{tabular}
+\end{center}
+\label{table:5}
+\end{table}
+Lasso-Regression with the best parameters is adopted to fit on the train data and make prediction. The RMSE on public leaderboard is 0.13955.
+
+\newpage
+\subsection{Stacking Model}
+The public leaderboard RMSEs of 3 single models are listed in \ref{table:6}. We can see (1)The performances of these 3 models are very similar. (2)Lasso-Regression performs the best among the 3 models.
+\begin{table}[!htbp]
+\caption{Public Leaderboard RMSEs of 3 single Models}
+\vspace{-15pt}
+\footnotesize
+\begin{center}
+\begin{tabular}{cc}
+\hline
+Model            & Public RMSE \\ \hline
+Xgboost          & 0.14181     \\
+SVM-Regression   & 0.1415      \\
+Lasso-Regression & 0.13955     \\ \hline
+\end{tabular}
+\end{center}
+\label{table:6}
+\end{table}
+We notice that SVM-Regression with linear kernel is very similar to linear regression. Therefore, we try 2 model combinations. 
+
+Combination1:Lasso-Regression+Xgboost(table \ref{table:7});Combination2:SVM-Regression+Xgboost(table \ref{table:8}).
+\begin{table}[!htbp]
+\caption{Combination1:Lasso-Regression+Xgboost}
+\vspace{-15pt}
+\footnotesize
+\begin{center}
+\begin{tabular}{ccc}
+\hline
+Lasso\_weight & Xgboost\_weight & Public RMSE \\ \hline
+0.8           & 0.2             & 0.13546     \\
+0.6           & 0.4             & \textcolor{blue}{0.13357}     \\
+0.4           & 0.6             & 0.13398     \\
+0.2           & 0.8             & 0.13673     \\ \hline
+\end{tabular}
+\end{center}
+\label{table:7}
+\end{table}
+\begin{table}[!htbp]
+\caption{Combination2:SVM-Regression+Xgboost}
+\vspace{-15pt}
+\footnotesize
+\begin{center}
+\begin{tabular}{ccc}
+\hline
+svr\_weight & Xgboost\_weight & Public RMSE \\ \hline
+0.8         & 0.2             & 0.1391      \\
+0.6         & 0.4             & 0.13791     \\
+0.4         & 0.6             & 0.13795     \\
+0.2         & 0.8             & 0.13926     \\ \hline
+\end{tabular}
+\end{center}
+\label{table:8}
+\end{table}
+We notice weight combination (lasso\_weight=0.6, Xgboost\_weight=0.4) can achieve the lowest public RMSE of 0.13357, which ranks top 36.5\%.
+
+
+
+\newpage
+\section{Conclusion}
+Due to time limitation, there are still many works which can be done to improve final score. The following are some places which can be improved:
+
+\textbf{1 Change a prediction target:} According to figure \ref{fig:2}, $above\_and\_ground\_area$ has a very strong predictive power on $log1p\_SalePrice$. We notice the fact that $above\_and\_ground\_area\times unit\_price=log1p\_SalePrice$. Therefore, we can change the prediction target to $unit\_price$ to make full use of the information contained in data.
+
+\textbf{2 Explore more features:} Feature engineering determines the upper bound of our final prediction performance, and our model determines how close we can achieve this upper bound. If we can design a feature which has the same value as the prediction target $log1p\_SalePrice$, then a single linear model can help us get a high score in public leaderboard.
+
+\textbf{3 Conduct feature Selection:} We have 301 features in this project. There must exist a subset of these 301 features which can minimize cross-validation score. Genetic Algorithm and Forward Algorithm can be used to solve this problem. In fact, we used to achieve top 10\% in this house price competition with the help of python package \textcolor{gray}{deap}.
+
+\textbf{4 Tune more parameters:} In our project, we only tune a part of model parameters due to time limitation. Grid-Search would consume a lot of time and thus it's not suitable for this task. Bayesian optimization is a powerful tool to solve this problem. However, we don't find appropriate R package. We used to use Python package \textcolor{gray}{hyperopt} to tune model parameters.
+
+
+
+
+
+
